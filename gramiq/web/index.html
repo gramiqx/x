@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>GRAMIQ – MRV Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.draw@1.0.4/dist/leaflet.draw.css"/>
+  <script src="https://unpkg.com/leaflet.draw@1.0.4/dist/leaflet.draw.js"></script>
+  <style>
+    #map { height: 500px; border-radius: 0.5rem; }
+    .btn { @apply px-4 py-2 rounded font-medium; }
+    .btn-green { @apply bg-green-600 text-white hover:bg-green-700; }
+    .btn-outline { @apply border border-green-600 text-green-700 hover:bg-green-50; }
+    .card { @apply p-5 border rounded-lg bg-white shadow hover:shadow-md transition; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+
+  <header class="bg-white shadow">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+      <a href="#" class="text-2xl font-bold text-green-700">🌱 GRAMIQ</a>
+      <div id="auth-ui">
+        <button onclick="login()" class="btn btn-green">Login</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="py-10 px-6 max-w-7xl mx-auto">
+    <section id="login-screen" class="text-center">
+      <h1 class="text-4xl font-bold text-green-800 mb-4">GRAMIQ</h1>
+      <p class="text-lg text-gray-600 mb-6">Digital MRV for Rural Climate Projects</p>
+      <button onclick="login()" class="btn btn-green text-lg px-8 py-3">Sign In</button>
+    </section>
+
+    <section id="dashboard" class="hidden">
+      <div class="bg-white rounded-lg shadow p-6 mb-8">
+        <h2 class="text-2xl font-bold text-green-800 mb-2">My Projects</h2>
+        <p class="text-gray-600 mb-6">Draw a new project or view existing ones.</p>
+        <div id="map" class="mb-6"></div>
+        <div id="project-list" class="space-y-4"></div>
+        <button onclick="promptNewProject()" class="btn btn-green mt-4">+ Add Project</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="bg-gray-800 text-white py-6 text-center text-sm">
+    &copy; 2025 GRAMIQ. Open for NGOs & Climate Projects.
+  </footer>
+
+  <script>
+    const API_URL = 'https://your-railway-app.up.railway.app'; // CHANGE AFTER DEPLOYMENT
+    let map, drawnItems;
+    let currentUser = null;
+
+    const loginScreen = document.getElementById('login-screen');
+    const dashboard = document.getElementById('dashboard');
+    const projectList = document.getElementById('project-list');
+    const authUi = document.getElementById('auth-ui');
+
+    async function login() {
+      const email = prompt("Enter your email (e.g., ngo@example.org)");
+      if (!email) return;
+      localStorage.setItem('token', 'demo-token');
+      currentUser = { email };
+      showDashboard();
+      loadProjects();
+      setTimeout(initMap, 500);
+    }
+
+    function logout() {
+      localStorage.removeItem('token');
+      currentUser = null;
+      authUi.innerHTML = '<button onclick="login()" class="btn btn-green">Login</button>';
+      loginScreen.classList.remove('hidden');
+      dashboard.classList.add('hidden');
+    }
+
+    function showDashboard() {
+      loginScreen.classList.add('hidden');
+      dashboard.classList.remove('hidden');
+      authUi.innerHTML = `<span class="mr-4">${currentUser.email}</span><button onclick="logout()" class="text-red-600">Logout</button>`;
+    }
+
+    window.onload = () => {
+      const token = localStorage.getItem('token');
+      if (token) {
+        currentUser = { email: 'user@ngo.org' };
+        showDashboard();
+        loadProjects();
+        setTimeout(initMap, 500);
+      }
+    };
+
+    async function loadProjects() {
+      try {
+        const res = await fetch(`${API_URL}/api/projects`);
+        const projects = await res.json();
+
+        projectList.innerHTML = '';
+        projects.forEach(p => {
+          const div = document.createElement('div');
+          div.className = 'card';
+          div.innerHTML = `
+            <h3 class="text-lg font-semibold">${p.name}</h3>
+            <p class="text-gray-600 text-sm">Created on ${new Date(p.created_at).toLocaleDateString()}</p>
+            <button onclick="viewReport(${p.id})" class="text-green-600 text-sm mt-2">📊 View Report</button>
+          `;
+          projectList.appendChild(div);
+        });
+      } catch (err) {
+        projectList.innerHTML = `<p class="text-red-500">⚠️ Could not load projects. Is backend live?</p>`;
+      }
+    }
+
+    function initMap() {
+      if (map) return;
+      map = L.map('map').setView([21.0, 78.0], 5);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OSM'
+      }).addTo(map);
+
+      drawnItems = new L.FeatureGroup();
+      map.addLayer(drawnItems);
+
+      const drawControl = new L.Control.Draw({
+        edit: { featureGroup: drawnItems },
+        draw: { polygon: true, marker: false, polyline: false, rectangle: false, circle: false, circlemarker: false }
+      });
+      map.addControl(drawControl);
+
+      map.on(L.Draw.Event.CREATED, async function (event) {
+        const layer = event.layer;
+        const geoJSON = layer.toGeoJSON().geometry;
+
+        drawnItems.addLayer(layer);
+
+        const name = prompt("Enter project name");
+        if (!name) return;
+
+        try {
+          const res = await fetch(`${API_URL}/api/projects`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, geometry: geoJSON })
+          });
+
+          if (res.ok) {
+            alert("✅ Project saved!");
+            loadProjects();
+          } else {
+            alert("❌ Save failed");
+          }
+        } catch (err) {
+          alert("❌ Connection error. Is backend running?");
+        }
+      });
+    }
+
+    function promptNewProject() {
+      alert("Draw a polygon on the map to create a new project.");
+    }
+
+    function viewReport(id) {
+      alert(`📄 Generating MRV Report for Project #${id}...`);
+    }
+  </script>
+</body>
+</html>
